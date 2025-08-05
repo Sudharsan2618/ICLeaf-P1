@@ -1,6 +1,6 @@
 # retrievers/web_retriever.py
 import requests
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from ddgs import DDGS
 from googleapiclient.discovery import build
 from github import Github, Auth
@@ -21,8 +21,41 @@ class WebRetriever:
         else:
             self.youtube_client = None
     
+    def retrieve_structured(self, query: str) -> Dict:
+        """Retrieve structured context from web, YouTube, and GitHub sources"""
+        results = {
+            'web_results': [],
+            'youtube_results': [],
+            'github_repositories': [],
+            'github_code': [],
+            'sources_used': []
+        }
+        
+        # Web search
+        web_results = self._web_search_structured(query)
+        if web_results:
+            results['web_results'] = web_results
+            results['sources_used'].append('web')
+        
+        # YouTube search
+        youtube_results = self._youtube_search_structured(query)
+        if youtube_results:
+            results['youtube_results'] = youtube_results
+            results['sources_used'].append('youtube')
+        
+        # GitHub search
+        github_repos, github_code = self._github_search_structured(query)
+        if github_repos:
+            results['github_repositories'] = github_repos
+            results['sources_used'].append('github')
+        if github_code:
+            results['github_code'] = github_code
+            results['sources_used'].append('github_code')
+        
+        return results
+    
     def retrieve(self, query: str) -> str:
-        """Retrieve context from web, YouTube, and GitHub sources"""
+        """Legacy method - kept for compatibility"""
         context_parts = []
         
         # Web search
@@ -49,8 +82,182 @@ class WebRetriever:
         
         return full_context if full_context else "No relevant information found."
     
+    def _web_search_structured(self, query: str) -> List[Dict]:
+        """Perform web search using DuckDuckGo and return structured data"""
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=MAX_SEARCH_RESULTS))
+                
+                if not results:
+                    return []
+                
+                structured_results = []
+                for result in results:
+                    structured_results.append({
+                        'title': result.get('title', 'N/A'),
+                        'url': result.get('link', 'N/A'),
+                        'description': result.get('body', 'N/A')
+                    })
+                
+                return structured_results
+        except Exception as e:
+            print(f"Web search error: {e}")
+            return []
+    
+    def _youtube_search_structured(self, query: str) -> List[Dict]:
+        """Search YouTube videos and return structured data"""
+        if not self.youtube_client:
+            print("YouTube API key not configured")
+            return []
+        
+        try:
+            # Search for videos using the YouTube Data API v3
+            search_response = self.youtube_client.search().list(
+                q=query,
+                part='id,snippet',
+                maxResults=MAX_SEARCH_RESULTS,
+                type='video',
+                order='relevance'
+            ).execute()
+            
+            if not search_response.get('items'):
+                return []
+            
+            # Get video IDs for detailed information
+            video_ids = [item['id']['videoId'] for item in search_response['items']]
+            
+            # Get detailed video information
+            videos_response = self.youtube_client.videos().list(
+                part='snippet,contentDetails,statistics',
+                id=','.join(video_ids)
+            ).execute()
+            
+            structured_results = []
+            for video in videos_response.get('items', []):
+                try:
+                    snippet = video.get('snippet', {})
+                    content_details = video.get('contentDetails', {})
+                    statistics = video.get('statistics', {})
+                    
+                    # Format duration from ISO 8601 format
+                    duration = content_details.get('duration', 'N/A')
+                    if duration != 'N/A':
+                        # Convert ISO 8601 duration to readable format
+                        import re
+                        duration_match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration)
+                        if duration_match:
+                            hours, minutes, seconds = duration_match.groups()
+                            duration_parts = []
+                            if hours and hours != '0':
+                                duration_parts.append(f"{hours}h")
+                            if minutes and minutes != '0':
+                                duration_parts.append(f"{minutes}m")
+                            if seconds and seconds != '0':
+                                duration_parts.append(f"{seconds}s")
+                            duration = ' '.join(duration_parts) if duration_parts else 'N/A'
+                    
+                    structured_results.append({
+                        'title': snippet.get('title', 'N/A'),
+                        'channel': snippet.get('channelTitle', 'N/A'),
+                        'duration': duration,
+                        'url': f"https://www.youtube.com/watch?v={video.get('id', 'N/A')}",
+                        'description': snippet.get('description', 'N/A')[:200] + "..." if len(snippet.get('description', '')) > 200 else snippet.get('description', 'N/A'),
+                        'views': statistics.get('viewCount', 'N/A'),
+                        'published': snippet.get('publishedAt', 'N/A')
+                    })
+                except Exception as video_error:
+                    # Skip individual videos that cause errors
+                    print(f"Error processing video: {video_error}")
+                    continue
+            
+            return structured_results
+        except Exception as e:
+            print(f"YouTube search error: {e}")
+            return []
+    
+    def _github_search_structured(self, query: str) -> Tuple[List[Dict], List[Dict]]:
+        """Search GitHub repositories and code with relevance filtering, return structured data"""
+        if not self.github_client:
+            return [], []
+        
+        # Define programming/technical keywords that make GitHub searches relevant
+        programming_keywords = [
+            'python', 'javascript', 'java', 'c++', 'c#', 'go', 'rust', 'php', 'ruby', 'swift',
+            'react', 'angular', 'vue', 'node', 'django', 'flask', 'spring', 'laravel',
+            'api', 'library', 'framework', 'tool', 'script', 'bot', 'automation',
+            'algorithm', 'data structure', 'machine learning', 'ai', 'ml', 'neural',
+            'database', 'sql', 'nosql', 'redis', 'mongodb', 'postgresql',
+            'docker', 'kubernetes', 'aws', 'azure', 'gcp', 'cloud',
+            'git', 'github', 'gitlab', 'ci/cd', 'deployment', 'devops',
+            'mobile', 'android', 'ios', 'flutter', 'react native',
+            'web', 'frontend', 'backend', 'fullstack', 'microservices'
+        ]
+        
+        # Check if query contains programming-related terms
+        query_lower = query.lower()
+        is_programming_query = any(keyword in query_lower for keyword in programming_keywords)
+        
+        # If it's not a programming-related query, skip GitHub search
+        if not is_programming_query:
+            return [], []
+        
+        try:
+            # Search repositories with better filtering
+            repos = self.github_client.search_repositories(
+                query=query, 
+                sort="stars", 
+                order="desc"
+            )
+            repo_results = []
+            
+            for repo in repos[:MAX_SEARCH_RESULTS]:
+                # Additional relevance check
+                repo_name_lower = repo.full_name.lower()
+                repo_desc_lower = (repo.description or "").lower()
+                
+                # Check if repository name or description contains query terms
+                query_terms = query_lower.split()
+                relevance_score = sum(1 for term in query_terms if term in repo_name_lower or term in repo_desc_lower)
+                
+                # Only include if it has some relevance
+                if relevance_score > 0:
+                    repo_results.append({
+                        'repository': repo.full_name,
+                        'description': repo.description or 'N/A',
+                        'stars': repo.stargazers_count,
+                        'url': repo.html_url,
+                        'relevance': relevance_score
+                    })
+            
+            # Search code with better filtering
+            code_results = self.github_client.search_code(query=query)
+            code_list = []
+            
+            for code in code_results[:MAX_SEARCH_RESULTS]:
+                # Check if the file path or repository name is relevant
+                file_path_lower = code.path.lower()
+                repo_name_lower = code.repository.full_name.lower()
+                
+                query_terms = query_lower.split()
+                relevance_score = sum(1 for term in query_terms if term in file_path_lower or term in repo_name_lower)
+                
+                # Only include if it has some relevance
+                if relevance_score > 0:
+                    code_list.append({
+                        'file': f"{code.repository.full_name}/{code.path}",
+                        'repository': code.repository.full_name,
+                        'url': code.html_url,
+                        'relevance': relevance_score
+                    })
+            
+            return repo_results, code_list
+        except Exception as e:
+            print(f"GitHub search error: {e}")
+            return [], []
+
+    # Legacy methods for compatibility
     def _web_search(self, query: str) -> str:
-        """Perform web search using DuckDuckGo"""
+        """Legacy method - Perform web search using DuckDuckGo"""
         try:
             with DDGS() as ddgs:
                 results = list(ddgs.text(query, max_results=MAX_SEARCH_RESULTS))
@@ -70,7 +277,7 @@ class WebRetriever:
             return ""
     
     def _youtube_search(self, query: str) -> str:
-        """Search YouTube videos using the official YouTube Data API v3"""
+        """Legacy method - Search YouTube videos using the official YouTube Data API v3"""
         if not self.youtube_client:
             print("YouTube API key not configured")
             return ""
@@ -139,7 +346,7 @@ class WebRetriever:
             return ""
     
     def _github_search(self, query: str) -> str:
-        """Search GitHub repositories and code with relevance filtering"""
+        """Legacy method - Search GitHub repositories and code with relevance filtering"""
         if not self.github_client:
             return ""
         
