@@ -35,4 +35,19 @@ class StructuredResponse(BaseModel):
     youtube_results: List[YouTubeResult] = Field(description="List of YouTube video results", default_factory=list)
     github_repositories: List[GitHubResult] = Field(description="List of GitHub repository results", default_factory=list)
     github_code: List[CodeResult] = Field(description="List of GitHub code results", default_factory=list)
-    sources_used: List[str] = Field(description="List of sources used (web, youtube, github)", default_factory=list) 
+    sources_used: List[str] = Field(description="List of sources used (web, youtube, github)", default_factory=list)
+
+# Internal Agent Models
+class InternalDocument(BaseModel):
+    title: str = Field(description="Title of the internal document")
+    content: str = Field(description="Content or snippet of the document")
+    source: str = Field(description="Source of the document (e.g., knowledge_base, training_material)")
+    relevance_score: float = Field(description="Relevance score (0-1)")
+    metadata: Optional[dict] = Field(description="Additional metadata", default_factory=dict)
+
+class InternalResponse(BaseModel):
+    answer: str = Field(description="Comprehensive answer based on internal knowledge")
+    internal_documents: List[InternalDocument] = Field(description="List of relevant internal documents", default_factory=list)
+    confidence_score: float = Field(description="Confidence score of the response (0-1)")
+    related_topics: List[str] = Field(description="List of related topics or concepts", default_factory=list)
+    sources_used: List[str] = Field(description="List of internal sources used", default_factory=list) 

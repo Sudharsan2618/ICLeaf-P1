@@ -14,6 +14,14 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 # YouTube API Configuration
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
+# Pinecone Configuration
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_INDEX = os.getenv("PINECONE_INDEX", "icleaf")  # Your index name
+
+# Embedding Model Configuration
+# Using a model that produces 384-dimensional vectors to match your index
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
 # Search Configuration
 MAX_SEARCH_RESULTS = 5
 MAX_CONTEXT_LENGTH = 4000 

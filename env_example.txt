@@ -11,4 +11,12 @@ GITHUB_TOKEN=your_github_token_here
 
 # YouTube Data API v3 Key (Optional - for YouTube search)
 # Get from: https://console.cloud.google.com/apis/credentials
-YOUTUBE_API_KEY=your_youtube_api_key_here 
+YOUTUBE_API_KEY=your_youtube_api_key_here
+
+# Pinecone API Key (Optional - for internal knowledge base)
+# Get from: https://app.pinecone.io/
+PINECONE_API_KEY=your_pinecone_api_key_here
+
+# Pinecone Index Name (Optional - for internal knowledge base)
+# Create an index in your Pinecone dashboard
+PINECONE_INDEX=your_index_name_here 
