@@ -1,10 +1,12 @@
 # main.py
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from utils.state import QueryState
 from agents.external_agent import ExternalAgent
 from agents.internal_agent import InternalAgent
 
 app = Flask(__name__)
+CORS(app)
 
 @app.route("/chat", methods=["POST"])
 def chat():

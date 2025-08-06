@@ -180,7 +180,6 @@ class WebRetriever:
         if not self.github_client:
             return [], []
         
-        # Define programming/technical keywords that make GitHub searches relevant
         programming_keywords = [
             'python', 'javascript', 'java', 'c++', 'c#', 'go', 'rust', 'php', 'ruby', 'swift',
             'react', 'angular', 'vue', 'node', 'django', 'flask', 'spring', 'laravel',
@@ -192,15 +191,10 @@ class WebRetriever:
             'mobile', 'android', 'ios', 'flutter', 'react native',
             'web', 'frontend', 'backend', 'fullstack', 'microservices'
         ]
-        
-        # Check if query contains programming-related terms
         query_lower = query.lower()
         is_programming_query = any(keyword in query_lower for keyword in programming_keywords)
-        
-        # If it's not a programming-related query, skip GitHub search
         if not is_programming_query:
             return [], []
-        
         try:
             # Search repositories with better filtering
             repos = self.github_client.search_repositories(
@@ -209,17 +203,12 @@ class WebRetriever:
                 order="desc"
             )
             repo_results = []
-            
-            for repo in repos[:MAX_SEARCH_RESULTS]:
-                # Additional relevance check
+            repos_list = list(repos) if repos is not None else []
+            for repo in repos_list[:MAX_SEARCH_RESULTS]:
                 repo_name_lower = repo.full_name.lower()
                 repo_desc_lower = (repo.description or "").lower()
-                
-                # Check if repository name or description contains query terms
                 query_terms = query_lower.split()
                 relevance_score = sum(1 for term in query_terms if term in repo_name_lower or term in repo_desc_lower)
-                
-                # Only include if it has some relevance
                 if relevance_score > 0:
                     repo_results.append({
                         'repository': repo.full_name,
@@ -228,28 +217,26 @@ class WebRetriever:
                         'url': repo.html_url,
                         'relevance': relevance_score
                     })
-            
             # Search code with better filtering
-            code_results = self.github_client.search_code(query=query)
-            code_list = []
-            
-            for code in code_results[:MAX_SEARCH_RESULTS]:
-                # Check if the file path or repository name is relevant
-                file_path_lower = code.path.lower()
-                repo_name_lower = code.repository.full_name.lower()
-                
-                query_terms = query_lower.split()
-                relevance_score = sum(1 for term in query_terms if term in file_path_lower or term in repo_name_lower)
-                
-                # Only include if it has some relevance
-                if relevance_score > 0:
-                    code_list.append({
-                        'file': f"{code.repository.full_name}/{code.path}",
-                        'repository': code.repository.full_name,
-                        'url': code.html_url,
-                        'relevance': relevance_score
-                    })
-            
+            try:
+                code_results = self.github_client.search_code(query=query)
+                code_list = []
+                code_results_list = list(code_results) if code_results is not None else []
+                for code in code_results_list[:MAX_SEARCH_RESULTS]:
+                    file_path_lower = code.path.lower()
+                    repo_name_lower = code.repository.full_name.lower()
+                    query_terms = query_lower.split()
+                    relevance_score = sum(1 for term in query_terms if term in file_path_lower or term in repo_name_lower)
+                    if relevance_score > 0:
+                        code_list.append({
+                            'file': f"{code.repository.full_name}/{code.path}",
+                            'repository': code.repository.full_name,
+                            'url': code.html_url,
+                            'relevance': relevance_score
+                        })
+            except Exception as code_e:
+                print(f"GitHub code search error: {code_e}")
+                code_list = []
             return repo_results, code_list
         except Exception as e:
             print(f"GitHub search error: {e}")

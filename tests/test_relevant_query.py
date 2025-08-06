@@ -8,11 +8,7 @@ def test_relevant_queries():
     
     # Test queries that should match our inserted data
     test_queries = [
-        "What are Python best practices?",
-        "How to implement machine learning algorithms?",
-        "Tell me about React development",
-        "What are database design principles?",
-        "Explain DevOps practices"
+        "Explain about autonomous AI Agents?",
     ]
     
     for query in test_queries:

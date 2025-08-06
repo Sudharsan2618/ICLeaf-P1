@@ -43,52 +43,46 @@ Context from internal knowledge base:
 Please provide a comprehensive answer based on the internal context above. If the context doesn't contain relevant information, provide a general answer based on your training."""),
         ])
     
-    def get_response(self):
-        """Generate structured response using Gemini with internal knowledge context"""
+    def get_response(self, relevance_threshold: float = 0.4):
+        """Generate structured response using Gemini with internal knowledge context. Only answer if relevant Pinecone results are found."""
         try:
             # Retrieve structured context from internal knowledge base
             structured_context = self.retriever.retrieve_structured(self.state.query)
-            
-            # Convert structured data to context string for the prompt
-            context_parts = []
-            
-            if structured_context['internal_documents']:
-                internal_context = "Internal Knowledge Base Results:\n"
-                for doc in structured_context['internal_documents']:
-                    internal_context += f"Title: {doc['title']}\n"
-                    internal_context += f"Source: {doc['source']}\n"
-                    internal_context += f"Relevance Score: {doc['relevance_score']:.2f}\n"
-                    internal_context += f"Content: {doc['content']}\n\n"
-                context_parts.append(internal_context)
-            
-            # Add confidence and related topics info
-            if structured_context['confidence_score'] > 0:
-                confidence_info = f"Overall Confidence: {structured_context['confidence_score']:.2f}\n"
-                context_parts.append(confidence_info)
-            
-            if structured_context['related_topics']:
-                topics_info = f"Related Topics: {', '.join(structured_context['related_topics'])}\n"
-                context_parts.append(topics_info)
-            
-            full_context = "\n".join(context_parts) if context_parts else "No relevant internal information found."
-            
+
+            # Filter documents by relevance threshold
+            relevant_docs = [doc for doc in structured_context['internal_documents'] if doc['relevance_score'] >= relevance_threshold]
+
+            if not relevant_docs:
+                # No relevant internal documents found
+                return {
+                    "answer": "No relevant information found in internal documents.",
+                    "source_document": None
+                }
+
+            # Use the most relevant document for the answer
+            top_doc = relevant_docs[0]
+            answer_context = f"Title: {top_doc['title']}\nSource: {top_doc['source']}\nContent: {top_doc['content']}"
+
             # Create the prompt with format instructions
             prompt = self.prompt_template.partial(
                 format_instructions=self.parser.get_format_instructions()
             )
-            
+
             # Generate response using Gemini
             chain = prompt | self.model | self.parser
             response = chain.invoke({
                 "query": self.state.query,
-                "context": full_context
+                "context": answer_context
             })
-            
-            # Convert the structured response to JSON
-            return response.model_dump_json(indent=2)
-            
+
+            # Return answer and document source in a clean format
+            return {
+                "answer": response.answer if hasattr(response, 'answer') else str(response),
+                "source_document": top_doc['source']
+            }
+
         except Exception as e:
-            return f"Error generating response: {str(e)}"
+            return {"answer": f"Error generating response: {str(e)}", "source_document": None}
 
 def call_gemini_api(prompt):
     """Legacy function - kept for compatibility"""
