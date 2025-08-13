@@ -1,18 +1,31 @@
 # retrievers/web_retriever.py
 import requests
+import time
 from typing import List, Dict, Tuple
 from ddgs import DDGS
 from googleapiclient.discovery import build
 from github import Github, Auth
+from github.GithubException import RateLimitExceededException, BadCredentialsException
 from config.settings import GITHUB_TOKEN, YOUTUBE_API_KEY, MAX_SEARCH_RESULTS, MAX_CONTEXT_LENGTH
 
 class WebRetriever:
     def __init__(self):
         # Use the new authentication method
         if GITHUB_TOKEN:
-            auth = Auth.Token(GITHUB_TOKEN)
-            self.github_client = Github(auth=auth)
+            try:
+                auth = Auth.Token(GITHUB_TOKEN)
+                self.github_client = Github(auth=auth)
+                # Test the token by making a simple API call
+                self.github_client.get_user()
+                print("GitHub authentication successful")
+            except BadCredentialsException:
+                print("GitHub token is invalid or expired")
+                self.github_client = None
+            except Exception as e:
+                print(f"GitHub authentication error: {e}")
+                self.github_client = None
         else:
+            print("GitHub token not configured")
             self.github_client = None
         
         # Initialize YouTube API client
@@ -21,36 +34,96 @@ class WebRetriever:
         else:
             self.youtube_client = None
     
+    def _check_github_rate_limit(self):
+        """Check GitHub rate limit and wait if necessary"""
+        if not self.github_client:
+            return False
+        
+        try:
+            rate_limit = self.github_client.get_rate_limit()
+            
+            # Try different ways to access search rate limit
+            search_limit = None
+            if hasattr(rate_limit, 'search'):
+                search_limit = rate_limit.search
+            elif hasattr(rate_limit, 'core'):
+                # Fallback to core rate limit
+                search_limit = rate_limit.core
+                print("⚠️  Using core rate limit as fallback")
+            else:
+                print("⚠️  Could not determine rate limit structure")
+                return True  # Continue anyway
+            
+            if search_limit:
+                remaining = search_limit.remaining
+                reset_time = search_limit.reset
+                
+                if remaining <= 0:
+                    wait_time = (reset_time - time.time()) + 60  # Add 60 seconds buffer
+                    if wait_time > 0:
+                        print(f"GitHub rate limit exceeded. Waiting {wait_time:.0f} seconds...")
+                        time.sleep(wait_time)
+                    return True
+                return True
+            else:
+                print("⚠️  Rate limit information unavailable, continuing...")
+                return True
+                
+        except Exception as e:
+            print(f"Error checking GitHub rate limit: {e}")
+            print("Continuing with search anyway...")
+            return True
+    
     def retrieve_structured(self, query: str) -> Dict:
         """Retrieve structured context from web, YouTube, and GitHub sources"""
         results = {
             'web_results': [],
             'youtube_results': [],
             'github_repositories': [],
-            'github_code': [],
             'sources_used': []
         }
         
-        # Web search
-        web_results = self._web_search_structured(query)
-        if web_results:
-            results['web_results'] = web_results
-            results['sources_used'].append('web')
+        # Web search (most reliable, try first)
+        try:
+            web_results = self._web_search_structured(query)
+            if web_results:
+                results['web_results'] = web_results
+                results['sources_used'].append('web')
+                print(f"✅ Web search successful: {len(web_results)} results")
+            else:
+                print("⚠️ Web search returned no results")
+        except Exception as e:
+            print(f"❌ Web search failed: {e}")
         
         # YouTube search
-        youtube_results = self._youtube_search_structured(query)
-        if youtube_results:
-            results['youtube_results'] = youtube_results
-            results['sources_used'].append('youtube')
+        try:
+            youtube_results = self._youtube_search_structured(query)
+            if youtube_results:
+                results['youtube_results'] = youtube_results
+                results['sources_used'].append('youtube')
+                print(f"✅ YouTube search successful: {len(youtube_results)} results")
+            else:
+                print("⚠️ YouTube search returned no results")
+        except Exception as e:
+            print(f"❌ YouTube search failed: {e}")
         
-        # GitHub search
-        github_repos, github_code = self._github_search_structured(query)
-        if github_repos:
-            results['github_repositories'] = github_repos
-            results['sources_used'].append('github')
-        if github_code:
-            results['github_code'] = github_code
-            results['sources_used'].append('github_code')
+        # GitHub repository search only (removed code search to avoid 403 errors)
+        try:
+            github_repos = self._github_search_repositories_only(query)
+            if github_repos:
+                results['github_repositories'] = github_repos
+                results['sources_used'].append('github')
+                print(f"✅ GitHub repository search successful: {len(github_repos)} results")
+            else:
+                print("⚠️ GitHub repository search returned no results")
+                
+        except Exception as e:
+            print(f"❌ GitHub search failed: {e}")
+            print("Continuing with other sources...")
+        
+        # Ensure we have at least some results
+        if not any([results['web_results'], results['youtube_results'], results['github_repositories']]):
+            print("⚠️ No sources returned results, this might indicate a configuration issue")
         
         return results
     
@@ -156,13 +229,20 @@ class WebRetriever:
                                 duration_parts.append(f"{seconds}s")
                             duration = ' '.join(duration_parts) if duration_parts else 'N/A'
                     
+                    # Ensure views field is always present and valid
+                    views = statistics.get('viewCount')
+                    if views is None or views == '':
+                        views = '0'
+                    else:
+                        views = str(views)
+                    
                     structured_results.append({
                         'title': snippet.get('title', 'N/A'),
                         'channel': snippet.get('channelTitle', 'N/A'),
                         'duration': duration,
                         'url': f"https://www.youtube.com/watch?v={video.get('id', 'N/A')}",
                         'description': snippet.get('description', 'N/A')[:200] + "..." if len(snippet.get('description', '')) > 200 else snippet.get('description', 'N/A'),
-                        'views': statistics.get('viewCount', 'N/A'),
+                        'views': views,  # Always ensure views is present
                         'published': snippet.get('publishedAt', 'N/A')
                     })
                 except Exception as video_error:
@@ -175,11 +255,17 @@ class WebRetriever:
             print(f"YouTube search error: {e}")
             return []
     
-    def _github_search_structured(self, query: str) -> Tuple[List[Dict], List[Dict]]:
-        """Search GitHub repositories and code with relevance filtering, return structured data"""
+    def _github_search_repositories_only(self, query: str) -> List[Dict]:
+        """Search GitHub repositories with relevance filtering, return structured data"""
         if not self.github_client:
-            return [], []
+            return []
         
+        # Check rate limit before proceeding
+        if not self._check_github_rate_limit():
+            print("GitHub rate limit check failed, skipping GitHub search")
+            return []
+        
+        query_lower = query.lower()
         programming_keywords = [
             'python', 'javascript', 'java', 'c++', 'c#', 'go', 'rust', 'php', 'ruby', 'swift',
             'react', 'angular', 'vue', 'node', 'django', 'flask', 'spring', 'laravel',
@@ -191,12 +277,12 @@ class WebRetriever:
             'mobile', 'android', 'ios', 'flutter', 'react native',
             'web', 'frontend', 'backend', 'fullstack', 'microservices'
         ]
-        query_lower = query.lower()
         is_programming_query = any(keyword in query_lower for keyword in programming_keywords)
         if not is_programming_query:
-            return [], []
+            return []
+        
         try:
-            # Search repositories with better filtering
+            print(f"Searching GitHub repositories for: {query}")
             repos = self.github_client.search_repositories(
                 query=query, 
                 sort="stars", 
@@ -210,37 +296,26 @@ class WebRetriever:
                 query_terms = query_lower.split()
                 relevance_score = sum(1 for term in query_terms if term in repo_name_lower or term in repo_desc_lower)
                 if relevance_score > 0:
-                    repo_results.append({
-                        'repository': repo.full_name,
+                    # Ensure all required fields are present and valid
+                    repo_data = {
+                        'repository': repo.full_name or 'N/A',
                         'description': repo.description or 'N/A',
-                        'stars': repo.stargazers_count,
-                        'url': repo.html_url,
-                        'relevance': relevance_score
-                    })
-            # Search code with better filtering
-            try:
-                code_results = self.github_client.search_code(query=query)
-                code_list = []
-                code_results_list = list(code_results) if code_results is not None else []
-                for code in code_results_list[:MAX_SEARCH_RESULTS]:
-                    file_path_lower = code.path.lower()
-                    repo_name_lower = code.repository.full_name.lower()
-                    query_terms = query_lower.split()
-                    relevance_score = sum(1 for term in query_terms if term in file_path_lower or term in repo_name_lower)
-                    if relevance_score > 0:
-                        code_list.append({
-                            'file': f"{code.repository.full_name}/{code.path}",
-                            'repository': code.repository.full_name,
-                            'url': code.html_url,
-                            'relevance': relevance_score
-                        })
-            except Exception as code_e:
-                print(f"GitHub code search error: {code_e}")
-                code_list = []
-            return repo_results, code_list
+                        'stars': int(repo.stargazers_count) if repo.stargazers_count is not None else 0,
+                        'url': repo.html_url or 'N/A',
+                        'relevance': int(relevance_score)
+                    }
+                    
+                    # Validate that all required fields are present
+                    if all(repo_data.values()) and repo_data['repository'] != 'N/A' and repo_data['url'] != 'N/A':
+                        repo_results.append(repo_data)
+            return repo_results
+            
+        except RateLimitExceededException:
+            print("GitHub repository search rate limit exceeded")
+            return []
         except Exception as e:
             print(f"GitHub search error: {e}")
-            return [], []
+            return []
 
     # Legacy methods for compatibility
     def _web_search(self, query: str) -> str:
@@ -315,12 +390,19 @@ class WebRetriever:
                                 duration_parts.append(f"{seconds}s")
                             duration = ' '.join(duration_parts) if duration_parts else 'N/A'
                     
+                    # Ensure views field is always present and valid
+                    views = statistics.get('viewCount')
+                    if views is None or views == '':
+                        views = '0'
+                    else:
+                        views = str(views)
+                    
                     formatted_results.append(f"Title: {snippet.get('title', 'N/A')}\n"
                                            f"Channel: {snippet.get('channelTitle', 'N/A')}\n"
                                            f"Duration: {duration}\n"
                                            f"URL: https://www.youtube.com/watch?v={video.get('id', 'N/A')}\n"
                                            f"Description: {snippet.get('description', 'N/A')[:200]}...\n"
-                                           f"Views: {statistics.get('viewCount', 'N/A')}\n"
+                                           f"Views: {views}\n"
                                            f"Published: {snippet.get('publishedAt', 'N/A')}\n")
                 except Exception as video_error:
                     # Skip individual videos that cause errors
@@ -333,8 +415,13 @@ class WebRetriever:
             return ""
     
     def _github_search(self, query: str) -> str:
-        """Legacy method - Search GitHub repositories and code with relevance filtering"""
+        """Legacy method - Search GitHub repositories with relevance filtering (code search removed)"""
         if not self.github_client:
+            return ""
+        
+        # Check rate limit before proceeding
+        if not self._check_github_rate_limit():
+            print("GitHub rate limit check failed, skipping GitHub search")
             return ""
         
         # Define programming/technical keywords that make GitHub searches relevant
@@ -360,6 +447,7 @@ class WebRetriever:
         
         try:
             # Search repositories with better filtering
+            print(f"Searching GitHub repositories for: {query}")
             repos = self.github_client.search_repositories(
                 query=query, 
                 sort="stars", 
@@ -384,32 +472,14 @@ class WebRetriever:
                                       f"URL: {repo.html_url}\n"
                                       f"Relevance: {relevance_score} matching terms\n")
             
-            # Search code with better filtering
-            code_results = self.github_client.search_code(query=query)
-            code_list = []
-            
-            for code in code_results[:MAX_SEARCH_RESULTS]:
-                # Check if the file path or repository name is relevant
-                file_path_lower = code.path.lower()
-                repo_name_lower = code.repository.full_name.lower()
-                
-                query_terms = query_lower.split()
-                relevance_score = sum(1 for term in query_terms if term in file_path_lower or term in repo_name_lower)
-                
-                # Only include if it has some relevance
-                if relevance_score > 0:
-                    code_list.append(f"File: {code.repository.full_name}/{code.path}\n"
-                                   f"Repository: {code.repository.full_name}\n"
-                                   f"URL: {code.html_url}\n"
-                                   f"Relevance: {relevance_score} matching terms\n")
-            
-            github_results = []
             if repo_results:
-                github_results.append("Top Repositories:\n" + "\n".join(repo_results))
-            if code_list:
-                github_results.append("Code Results:\n" + "\n".join(code_list))
+                return "Top Repositories:\n" + "\n".join(repo_results)
+            else:
+                return ""
             
-            return "\n\n".join(github_results)
+        except RateLimitExceededException:
+            print("GitHub repository search rate limit exceeded")
+            return "GitHub search temporarily unavailable due to rate limiting. Please try again later."
         except Exception as e:
             print(f"GitHub search error: {e}")
             return ""
