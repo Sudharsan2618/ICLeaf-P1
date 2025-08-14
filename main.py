@@ -19,5 +19,9 @@ def chat():
     response = agent.get_response()
     return jsonify({"response": response})
 
+@app.get("/health")
+def health():
+    return jsonify({"status": "Running"})
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
