@@ -6,7 +6,7 @@ from agents.external_agent import ExternalAgent
 from agents.internal_agent import InternalAgent
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins="*")
 
 @app.route("/chat", methods=["POST"])
 def chat():
