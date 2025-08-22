@@ -1,29 +1,40 @@
 # main.py
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
 from utils.state import QueryState
 from agents.external_agent import ExternalAgent
 from agents.internal_agent import InternalAgent
 
-app = Flask(__name__)
-CORS(app, origins="*")
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
+class ChatRequest(BaseModel):
+    role: str
+    mode: str
+    query: str
 
-@app.route("/chat", methods=["POST"])
-def chat():
-    data = request.json
-    state = QueryState(data["role"], data["mode"], data["query"])
+@app.post("/chat")
+def chat(payload: ChatRequest):
+    state = QueryState(payload.role, payload.mode, payload.query)
     if state.mode == "external":
         agent = ExternalAgent(state)
     else:
         agent = InternalAgent(state)
     response = agent.get_response()
-    return jsonify({"response": response})
+    return {"response": response}
 
 @app.get("/health")
 def health():
-    return jsonify({"status": "Running"})
+    return {"status": "Running"}
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
