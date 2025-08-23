@@ -12,7 +12,7 @@ class ExternalToolManager:
             StructuredTool.from_function(
                 func=self._search_web_sources,
                 name="search_web_sources", 
-                description="Search web, YouTube, and GitHub for current information. Use this when the user asks for research, latest information, tutorials, best practices, or external knowledge."
+                description="Search the web and YouTube for current information. Use this when the user asks for research, latest information, tutorials, best practices, or external knowledge."
             )
         ]
     

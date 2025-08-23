@@ -77,21 +77,69 @@ class ExternalAgent(BaseAgent):
             
             # Use agent for research queries
             result = self.executor.invoke({"input": self.state.query})
-            
-            # Parse the result to maintain UI compatibility
+
+            # Default empty payload
+            payload = {
+                "answer": "",
+                "web_results": [],
+                "youtube_results": [],
+                "github_repositories": [],  # kept for UI compatibility but empty
+                "sources_used": []
+            }
+
+            # Prefer the model's final text as summary
+            payload["answer"] = result.get("output", "")
+
+            # Try to parse structured JSON directly from output
             try:
-                # Try to parse as JSON if it's a structured response
-                parsed_result = json.loads(result["output"])
-                return parsed_result
-            except:
-                # If not JSON, return as simple answer with empty visualizations
-                return {
-                    "answer": result["output"],
-                    "web_results": [],
-                    "youtube_results": [],
-                    "github_repositories": [],
-                    "sources_used": []
-                }
+                direct = result.get("output", "").strip()
+                # Strip code fences if present
+                if direct.startswith("```"):
+                    direct = direct.strip("`\n ")
+                    # after stripping language hints, find first '{'
+                    brace_idx = direct.find('{')
+                    if brace_idx != -1:
+                        direct = direct[brace_idx:]
+                parsed = json.loads(direct)
+                payload["web_results"] = parsed.get("web_results", [])
+                payload["youtube_results"] = parsed.get("youtube_results", [])
+                payload["sources_used"] = [s for s in parsed.get("sources_used", []) if s in ("web", "youtube")]
+                # Ensure github list is empty
+                payload["github_repositories"] = []
+                # If parsed also included an answer, prefer it
+                if parsed.get("answer"):
+                    payload["answer"] = parsed["answer"]
+                return payload
+            except Exception:
+                pass
+
+            # Fallback: try to parse tool observations from intermediate steps
+            steps = result.get("intermediate_steps", [])
+            if steps:
+                # steps may be list of tuples (AgentAction, observation) or dicts
+                for step in steps:
+                    observation = None
+                    if isinstance(step, (list, tuple)) and len(step) >= 2:
+                        observation = step[1]
+                    elif isinstance(step, dict):
+                        observation = step.get("observation") or step.get("output")
+                    if not observation:
+                        continue
+                    if isinstance(observation, str):
+                        try:
+                            parsed = json.loads(observation)
+                            payload["web_results"] = parsed.get("web_results", [])
+                            payload["youtube_results"] = parsed.get("youtube_results", [])
+                            payload["sources_used"] = [s for s in parsed.get("sources_used", []) if s in ("web", "youtube")]
+                            payload["github_repositories"] = []
+                            break
+                        except Exception:
+                            continue
+
+            # Ensure answer is not empty
+            if not payload["answer"]:
+                payload["answer"] = "Here are relevant web and YouTube results."
+            return payload
                 
         except Exception as e:
             return {

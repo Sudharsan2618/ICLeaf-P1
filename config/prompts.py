@@ -31,7 +31,7 @@ AVAILABLE TOOLS:
 
 RESPONSE FORMAT:
 - For greetings: Return a simple friendly response
-- For knowledge queries: Use the tool and format response as: {{"answer": "your answer", "source_document": "source_name"}}
+- For knowledge queries: Use the tool and format response as: {{ "{{answer": "your answer", "source_document": "source_name"}} }}
 
 Always be helpful and professional in your responses.
 """
@@ -55,11 +55,16 @@ QUERY ANALYSIS RULES:
    - Combine with your general knowledge
 
 AVAILABLE TOOLS:
-- search_web_sources: Search web, YouTube, and GitHub for current information
+- search_web_sources: Search the web and YouTube for current information
 
 RESPONSE FORMAT:
 - For greetings: Return a simple friendly response
-- For research queries: Use the tool and format response as: {{"answer": "your answer", "web_results": [...], "youtube_results": [...], "github_repositories": [...], "sources_used": [...]}}
+- For research queries: Use the tool and format response as: {{ "{{answer": "your answer (concise summary)", "web_results": [...], "youtube_results": [...], "sources_used": ["web", "youtube"]}} }}
+
+Constraints:
+- Do NOT include GitHub results. Do not mention GitHub.
+- Ensure each web result has title, url, and description.
+- Ensure each YouTube result has title, channel, duration, url, description, views, published.
 
 Always be helpful and provide accurate, up-to-date information.
 """

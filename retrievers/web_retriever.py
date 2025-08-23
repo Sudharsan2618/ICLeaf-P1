@@ -10,23 +10,8 @@ from config.settings import GITHUB_TOKEN, YOUTUBE_API_KEY, MAX_SEARCH_RESULTS, M
 
 class WebRetriever:
     def __init__(self):
-        # Use the new authentication method
-        if GITHUB_TOKEN:
-            try:
-                auth = Auth.Token(GITHUB_TOKEN)
-                self.github_client = Github(auth=auth)
-                # Test the token by making a simple API call
-                self.github_client.get_user()
-                print("GitHub authentication successful")
-            except BadCredentialsException:
-                print("GitHub token is invalid or expired")
-                self.github_client = None
-            except Exception as e:
-                print(f"GitHub authentication error: {e}")
-                self.github_client = None
-        else:
-            print("GitHub token not configured")
-            self.github_client = None
+        # Disable GitHub by default for this app behavior
+        self.github_client = None
         
         # Initialize YouTube API client
         if YOUTUBE_API_KEY:
@@ -75,7 +60,7 @@ class WebRetriever:
             return True
     
     def retrieve_structured(self, query: str) -> Dict:
-        """Retrieve structured context from web, YouTube, and GitHub sources"""
+        """Retrieve structured context from web and YouTube sources (GitHub disabled)"""
         results = {
             'web_results': [],
             'youtube_results': [],
@@ -106,20 +91,7 @@ class WebRetriever:
                 print("⚠️ YouTube search returned no results")
         except Exception as e:
             print(f"❌ YouTube search failed: {e}")
-        
-        # GitHub repository search only (removed code search to avoid 403 errors)
-        try:
-            github_repos = self._github_search_repositories_only(query)
-            if github_repos:
-                results['github_repositories'] = github_repos
-                results['sources_used'].append('github')
-                print(f"✅ GitHub repository search successful: {len(github_repos)} results")
-            else:
-                print("⚠️ GitHub repository search returned no results")
-                
-        except Exception as e:
-            print(f"❌ GitHub search failed: {e}")
-            print("Continuing with other sources...")
+        # GitHub search disabled
         
         # Ensure we have at least some results
         if not any([results['web_results'], results['youtube_results'], results['github_repositories']]):
@@ -168,7 +140,8 @@ class WebRetriever:
                 for result in results:
                     structured_results.append({
                         'title': result.get('title', 'N/A'),
-                        'url': result.get('link', 'N/A'),
+                        # DDGS returns 'href' for URL in text results
+                        'url': result.get('href', result.get('link', 'N/A')),
                         'description': result.get('body', 'N/A')
                     })
                 
