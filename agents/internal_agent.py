@@ -12,6 +12,7 @@ from langchain.agents import create_openai_tools_agent, AgentExecutor
 from langchain.prompts import MessagesPlaceholder
 import json
 import random
+import re
 
 class InternalAgent(BaseAgent):
     def __init__(self, state):
@@ -54,11 +55,30 @@ class InternalAgent(BaseAgent):
             handle_parsing_errors=True
         )
     
+    def _starts_with_greeting(self, query: str) -> bool:
+        """Returns True if the message starts with a greeting token."""
+        pattern = r"^\s*(hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening)\b"
+        return re.search(pattern, query.lower()) is not None
+
+    def _contains_question(self, query: str) -> bool:
+        """Production-safe heuristic for detecting an actual question."""
+        if "?" in query:
+            return True
+        interrogatives = (
+            r"\b(who|what|when|where|why|how|which)\b",
+            r"\b(can|could|would|should)\s+you\b",
+            r"\b(tell me|show me|help me|need|find|explain)\b",
+        )
+        q = query.lower()
+        return any(re.search(p, q) for p in interrogatives)
+
     def get_response(self):
         """Get response with intelligent tool selection"""
         try:
-            # Check if query is a greeting
-            if self._is_greeting(self.state.query):
+            user_query = (self.state.query or "").strip()
+
+            # Fast path: pure greeting only (no need to call any tools)
+            if self._is_greeting(user_query) and not self._contains_question(user_query):
                 # Return greeting response without using tools
                 greeting_responses = [
                     "Hello! How can I help you with internal knowledge today?",
@@ -71,18 +91,35 @@ class InternalAgent(BaseAgent):
                     "source_document": None
                 }
             
+            # Greeting + question: greet then run internal knowledge pipeline
+            greeting_prefix = ""
+            if self._starts_with_greeting(user_query) and self._contains_question(user_query):
+                greeting_prefix = random.choice([
+                    "Hello! ",
+                    "Hi! ",
+                    "Hey! ",
+                    "Good to see you! "
+                ])
+            
             # Use agent for knowledge queries
-            result = self.executor.invoke({"input": self.state.query})
+            result = self.executor.invoke({"input": user_query})
             
             # Parse the result to maintain UI compatibility
             try:
                 # Try to parse as JSON if it's a structured response
                 parsed_result = json.loads(result["output"])
+                if greeting_prefix:
+                    # Prepend greeting to the answer field if present
+                    if isinstance(parsed_result, dict) and parsed_result.get("answer"):
+                        parsed_result["answer"] = f"{greeting_prefix}{parsed_result['answer']}"
                 return parsed_result
             except:
                 # If not JSON, return as simple answer
+                answer_text = result.get("output", "")
+                if greeting_prefix:
+                    answer_text = f"{greeting_prefix}{answer_text}"
                 return {
-                    "answer": result["output"],
+                    "answer": answer_text,
                     "source_document": "internal_knowledge_base"
                 }
                 
